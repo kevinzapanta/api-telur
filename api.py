@@ -24,63 +24,25 @@ def train():
 
     try:
         df = pd.DataFrame(dataset)
-
-        # =========================
-        # VALIDASI (TANPA AFKIR)
-        # =========================
-        required_cols = [
-            "umur_ayam",
-            "jumlah_ayam",
-            "pakan_total_kg",
-            "kematian",
-            "telur_kg"
-        ]
-
+        required_cols = ["jumlah_ayam", "pakan_total_kg", "kematian", "afkir", "telur_kg"]
         for c in required_cols:
             if c not in df.columns:
                 return jsonify({"status": "error", "message": f"Kolom '{c}' tidak ditemukan"}), 400
 
-        # =========================
-        # KONVERSI & CLEANING
-        # =========================
-        for col in required_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        df.dropna(subset=required_cols, inplace=True)
-
-        # =========================
-        # FEATURE ENGINEERING
-        # =========================
+        # Feature engineering
         df["pakan_per_ayam"] = df["pakan_total_kg"] / df["jumlah_ayam"]
-        df["persentase"] = (df["telur_kg"] / df["jumlah_ayam"]) * 100
-
-        # HANDLE INF / NAN
-        df.replace([np.inf, -np.inf], 0, inplace=True)
-        df.fillna(0, inplace=True)
-
-        X = df[[
-            "umur_ayam",
-            "jumlah_ayam",
-            "pakan_per_ayam",
-            "kematian",
-            "persentase"
-        ]]
+        X = df[["jumlah_ayam", "pakan_per_ayam", "kematian", "afkir"]]
         y = df["telur_kg"]
 
-        # =========================
-        # SPLIT DATA
-        # =========================
+        # Training params
         n_estimators = int(training.get("n_estimators", 150))
         random_state = int(training.get("random_state", 42))
         max_depth = training.get("max_depth", 6)
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=random_state
-        )
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=random_state)
 
-        # =========================
-        # TRAIN MODEL
-        # =========================
+        # Model
         model = RandomForestRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -88,13 +50,10 @@ def train():
             min_samples_split=10,
             random_state=random_state
         )
-
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
 
-        # =========================
-        # EVALUASI
-        # =========================
+        # Evaluasi
         MAE = mean_absolute_error(y_test, y_pred)
         MSE = mean_squared_error(y_test, y_pred)
         RMSE = np.sqrt(MSE)
@@ -105,26 +64,18 @@ def train():
         MSE_per_ayam = MSE / (avg_ayam ** 2)
         RMSE_per_ayam = RMSE / avg_ayam
 
-        # =========================
-        # RINGKASAN PRODUKSI
-        # =========================
+        # Prediksi ringkasan
         harian_telur_kg = y.mean()
         bulanan_telur_kg = y.sum()
         telur_per_ayam = harian_telur_kg / df["jumlah_ayam"].mean()
+        harian_telur_butir = harian_telur_kg / 0.06  # 1 telur ≈ 60 gr
+        bulanan_telur_butir = bulanan_telur_kg / 0.06
 
-        # FIX KONVERSI
-        harian_telur_butir = harian_telur_kg / 0.0625
-        bulanan_telur_butir = bulanan_telur_kg / 0.0625
-
-        # =========================
-        # SAVE MODEL
-        # =========================
+        # Save model
         with open("model_telur.pkl", "wb") as f:
             pickle.dump(model, f)
 
-        # =========================
-        # OUTPUT
-        # =========================
+        # Final JSON output
         return jsonify({
             "status": "success",
             "MAE_kg": round(MAE, 3),
@@ -148,71 +99,197 @@ def train():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- FUNGSI HELPER (DIPERBAIKI) ---
+def internal_train_manual(dataset, training_params):
+    df = pd.DataFrame(dataset)
     
+    # Konversi ke numeric dan buang baris yang rusak
+    cols_to_fix = ["jumlah_ayam", "pakan_total_kg", "kematian", "afkir", "telur_kg"]
+    for col in cols_to_fix:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df.dropna(subset=cols_to_fix, inplace=True)
+
+    # Feature Engineering: Penting biar hasil dinamis!
+    df["pakan_per_ayam"] = df["pakan_total_kg"] / df["jumlah_ayam"]
+    
+    # Hindari pembagian dengan nol
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    df.fillna(0, inplace=True)
+
+    X = df[["jumlah_ayam", "pakan_per_ayam", "kematian", "afkir"]]
+    y = df["telur_kg"]
+
+    # Parameter model dibuat lebih fleksibel biar gak "stuck" di angka rata-rata
+    n_estimators = int(training_params.get("n_estimators", 100))
+    random_state = int(training_params.get("random_state", 42))
+    
+    # Split data (sesuaikan test_size jika data dikit)
+    test_size = 0.2 if len(df) > 10 else 0.1
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
+
+    # Model Random Forest (Settingan dikurangi biar sensitif terhadap input manual)
+    model = RandomForestRegressor(
+        n_estimators=n_estimators,
+        max_depth=None, # Biar model bisa belajar detail data
+        min_samples_leaf=1, # Biar lebih sensitif terhadap perubahan input
+        min_samples_split=2,
+        random_state=random_state
+    )
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    MAE = mean_absolute_error(y_test, y_pred)
+    MSE = mean_squared_error(y_test, y_pred)
+    R2 = r2_score(y_test, y_pred)
+
+    return {
+        "model": model,
+        "MAE": MAE,
+        "MSE": MSE,
+        "R2": R2,
+        "train_rows": len(X_train),
+        "test_rows": len(X_test),
+        "avg_ayam_hist": df["jumlah_ayam"].mean(),
+        "features": list(X.columns)
+    }
+
 @app.route("/predict-manual", methods=["POST"])
 def predict_manual():
     data = request.get_json()
-
     try:
+        dataset = data.get("dataset")
+        if not dataset or len(dataset) < 2:
+            return jsonify({"status": "error", "message": "Dataset minimal butuh 2 baris data historis"}), 400
+            
+        df = pd.DataFrame(dataset)
+        
         # =========================
-        # LOAD MODEL
+        # 1. KONVERSI & VALIDASI
         # =========================
-        try:
-            with open("model_telur.pkl", "rb") as f:
-                model = pickle.load(f)
-        except:
-            return jsonify({"status": "error", "message": "Model belum di-train"}), 400
+        cols_required = ["umur_ayam", "jumlah_ayam", "pakan_total_kg", "kematian", "persentase_bertelur"]
+        for col in cols_required:
+            if col not in df.columns:
+                return jsonify({"status": "error", "message": f"Kolom {col} tidak ada di dataset"}), 400
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        df.dropna(inplace=True)
 
         # =========================
-        # INPUT DARI UI
+        # 2. KONSTANTA PENTING
         # =========================
-        umur = float(data.get("umur", 0))
-        jumlah_ayam = float(data.get("jumlah_ayam", 0))
-        pakan = float(data.get("pakan_total_kg", 0))
-        kematian = float(data.get("kematian", 0))
-        persentase = float(data.get("persentase", 0))
-
-        if jumlah_ayam <= 0:
-            return jsonify({"status": "error", "message": "Jumlah ayam harus > 0"}), 400
+        BERAT_TELUR = 0.048  # kg (48 gram) -> SESUAI DATA LAPANGAN
 
         # =========================
-        # FEATURE ENGINEERING
+        # 3. HITUNG TARGET REAL (BUKAN ASUMSI LAGI)
         # =========================
-        pakan_per_ayam = pakan / jumlah_ayam
-
-        X_input = [[
-            umur,
-            jumlah_ayam,
-            pakan_per_ayam,
-            kematian,
-            persentase
-        ]]
+        df["jumlah_butir"] = (df["jumlah_ayam"] * (df["persentase_bertelur"] / 100)).round().astype(int)
+        df["telur_kg"] = df["jumlah_butir"] * BERAT_TELUR
 
         # =========================
-        # PREDIKSI MODEL
+        # 4. FEATURE ENGINEERING
         # =========================
-        pred_kg = float(model.predict(X_input)[0])
-        pred_kg = max(pred_kg, 0)
+        df["pakan_per_ayam"] = df.apply(
+            lambda x: x["pakan_total_kg"] / x["jumlah_ayam"] if x["jumlah_ayam"] > 0 else 0,
+            axis=1
+        )
+        
+        features = ["umur_ayam", "jumlah_ayam", "pakan_per_ayam", "kematian"]
+        X = df[features]
+        y = df["telur_kg"]
 
         # =========================
-        # KONVERSI
+        # 5. TRAINING MODEL (OPTIONAL)
         # =========================
-        telur_butir = pred_kg / 0.0625
-        telur_per_ayam = pred_kg / jumlah_ayam
+        if len(df) >= 5:
+            test_size = 0.2 if len(df) > 10 else 0.1
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+        else:
+            X_train, X_test, y_train, y_test = X, X, y, y
+            
+        model = RandomForestRegressor(
+            n_estimators=200,
+            random_state=42
+        )
+        model.fit(X_train, y_train)
+        
+        y_pred = model.predict(X_test)
+        MAE = mean_absolute_error(y_test, y_pred)
+        R2 = r2_score(y_test, y_pred) if len(y_test) > 1 else 1.0
 
         # =========================
-        # OUTPUT
+        # 6. INPUT USER
+        # =========================
+        jml_ayam_input = float(data.get("jumlah_ayam", 0))
+        pakan_input = float(data.get("pakan_total_kg", 0))
+        kematian_input = float(data.get("kematian", 0))
+        umur_input = float(data.get("umur_ayam", 0))
+        persen_input = float(data.get("persentase_bertelur", 0))
+
+        if jml_ayam_input <= 0:
+            return jsonify({"status": "error", "message": "Jumlah ayam input harus > 0"}), 400
+
+        # =========================
+        # 7. RUMUS BAKU (INI YANG UTAMA)
+        # =========================
+        jumlah_butir_real = int(round(jml_ayam_input * (persen_input / 100)))
+        jumlah_kg_real = round(jumlah_butir_real * BERAT_TELUR, 1)
+
+        # =========================
+        # 8. PREDIKSI MODEL (PEMBANDING)
+        # =========================
+        pakan_per_ayam_input = pakan_input / jml_ayam_input
+        
+        X_input = pd.DataFrame([[
+            umur_input, jml_ayam_input, pakan_per_ayam_input, kematian_input
+        ]], columns=features)
+        
+        pred_kg = max(float(model.predict(X_input)[0]), 0)
+        pred_butir = int(round(pred_kg / BERAT_TELUR))
+
+        # =========================
+        # 9. HITUNG FCR (BONUS)
+        # =========================
+        fcr_real = round(pakan_input / jumlah_kg_real, 2) if jumlah_kg_real > 0 else 0
+
+        # =========================
+        # 10. RESPONSE
         # =========================
         return jsonify({
             "status": "success",
+            "metrik": {
+                "MAE": round(float(MAE), 4),
+                "R2": round(float(R2), 4),
+                "train_rows": len(X_train)
+            },
             "prediksi": {
-                "harian_telur_kg": round(pred_kg, 2),
-                "bulanan_telur_kg": round(pred_kg * 30, 2),
-                "telur_per_ayam": round(telur_per_ayam, 4),
-                "harian_telur_butir": int(round(telur_butir)),
-                "bulanan_telur_butir": int(round(telur_butir * 30))
+                # HASIL UTAMA (RUMUS)
+                "harian_telur_butir": jumlah_butir_real,
+                "harian_telur_kg": jumlah_kg_real,
+
+                # VALIDASI TAMBAHAN
+                "produktivitas_persen": round((jumlah_butir_real / jml_ayam_input) * 100, 2),
+                "fcr": fcr_real,
+
+                # HASIL MODEL (OPSIONAL)
+                "model_telur_kg": round(pred_kg, 2),
+                "model_telur_butir": pred_butir,
+
+                # SELISIH (DEBUG / ANALISIS)
+                "selisih_butir_model_vs_real": pred_butir - jumlah_butir_real
             }
         })
 
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)}), 500
+        
+@app.route("/", methods=["GET"])
+def home():
+    return "🚀 API Training Model Produksi Telur (ANTI DATA BOCOR)"
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080, debug=True)
