@@ -236,6 +236,23 @@ def predict_manual():
         model.fit(X_train, y_train)
         
         y_pred = model.predict(X_test)
+        
+        # =========================
+        # TAMBAHAN CLASSIFICATION METRICS 🔥
+        # =========================
+        threshold = y.mean()
+        
+        y_test_class = (y_test > threshold).astype(int)
+        y_pred_class = (y_pred > threshold).astype(int)
+        
+        accuracy = accuracy_score(y_test_class, y_pred_class)
+        precision = precision_score(y_test_class, y_pred_class, zero_division=0)
+        recall = recall_score(y_test_class, y_pred_class, zero_division=0)
+        f1 = f1_score(y_test_class, y_pred_class, zero_division=0)
+        
+        # =========================
+        # EVALUASI REGRESSION (LANJUT)
+        # =========================
         MAE = mean_absolute_error(y_test, y_pred)
         R2 = r2_score(y_test, y_pred) if len(y_test) > 1 else 1.0
 
@@ -282,6 +299,10 @@ def predict_manual():
             "metrik": {
                 "MAE": round(float(MAE), 4),
                 "R2": round(float(R2), 4),
+                "Accuracy": round(float(accuracy), 3),
+                "Precision": round(float(precision), 3),
+                "Recall": round(float(recall), 3),
+                "F1_score": round(float(f1), 3),
                 "train_rows": len(X_train)
             },
             "prediksi": {
