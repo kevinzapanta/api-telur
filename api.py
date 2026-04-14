@@ -6,6 +6,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
 
 app = Flask(__name__)
 
@@ -52,6 +54,21 @@ def train():
         )
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
+        # =========================
+        # KONVERSI KE CLASS
+        # =========================
+        threshold = y.mean()
+        
+        y_test_class = (y_test > threshold).astype(int)
+        y_pred_class = (y_pred > threshold).astype(int)
+        
+        # =========================
+        # METRIK CLASSIFICATION
+        # =========================
+        accuracy = accuracy_score(y_test_class, y_pred_class)
+        precision = precision_score(y_test_class, y_pred_class, zero_division=0)
+        recall = recall_score(y_test_class, y_pred_class, zero_division=0)
+        f1 = f1_score(y_test_class, y_pred_class, zero_division=0)
 
         # Evaluasi
         MAE = mean_absolute_error(y_test, y_pred)
