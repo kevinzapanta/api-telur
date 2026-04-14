@@ -6,8 +6,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
 
 app = Flask(__name__)
 
@@ -54,21 +52,6 @@ def train():
         )
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
-        # =========================
-        # KONVERSI KE CLASS
-        # =========================
-        threshold = y.mean()
-        
-        y_test_class = (y_test > threshold).astype(int)
-        y_pred_class = (y_pred > threshold).astype(int)
-        
-        # =========================
-        # METRIK CLASSIFICATION
-        # =========================
-        accuracy = accuracy_score(y_test_class, y_pred_class)
-        precision = precision_score(y_test_class, y_pred_class, zero_division=0)
-        recall = recall_score(y_test_class, y_pred_class, zero_division=0)
-        f1 = f1_score(y_test_class, y_pred_class, zero_division=0)
 
         # Evaluasi
         MAE = mean_absolute_error(y_test, y_pred)
@@ -102,10 +85,6 @@ def train():
             "MSE_per_ayam": round(MSE_per_ayam, 6),
             "RMSE_per_ayam": round(RMSE_per_ayam, 6),
             "R2": round(float(R2), 3),
-            "Accuracy": round(float(accuracy), 3),
-            "Precision": round(float(precision), 3),
-            "Recall": round(float(recall), 3),
-            "F1_score": round(float(f1), 3),
             "Train_rows": len(X_train),
             "Test_rows": len(X_test),
             "Features_used": list(X.columns),
@@ -180,8 +159,67 @@ def internal_train_manual(dataset, training_params):
 def predict_manual():
     data = request.get_json()
     try:
+        dataset = data.get("dataset")
+        if not dataset or len(dataset) < 2:
+            return jsonify({"status": "error", "message": "Dataset minimal butuh 2 baris data historis"}), 400
+            
+        df = pd.DataFrame(dataset)
+        
         # =========================
-        # 1. INPUT USER
+        # 1. KONVERSI & VALIDASI
+        # =========================
+        cols_required = ["umur_ayam", "jumlah_ayam", "pakan_total_kg", "kematian", "persentase_bertelur"]
+        for col in cols_required:
+            if col not in df.columns:
+                return jsonify({"status": "error", "message": f"Kolom {col} tidak ada di dataset"}), 400
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        df.dropna(inplace=True)
+
+        # =========================
+        # 2. KONSTANTA PENTING
+        # =========================
+        BERAT_TELUR = 0.048  # kg (48 gram) -> SESUAI DATA LAPANGAN
+
+        # =========================
+        # 3. HITUNG TARGET REAL (BUKAN ASUMSI LAGI)
+        # =========================
+        df["jumlah_butir"] = (df["jumlah_ayam"] * (df["persentase_bertelur"] / 100)).round().astype(int)
+        df["telur_kg"] = df["jumlah_butir"] * BERAT_TELUR
+
+        # =========================
+        # 4. FEATURE ENGINEERING
+        # =========================
+        df["pakan_per_ayam"] = df.apply(
+            lambda x: x["pakan_total_kg"] / x["jumlah_ayam"] if x["jumlah_ayam"] > 0 else 0,
+            axis=1
+        )
+        
+        features = ["umur_ayam", "jumlah_ayam", "pakan_per_ayam", "kematian"]
+        X = df[features]
+        y = df["telur_kg"]
+
+        # =========================
+        # 5. TRAINING MODEL (OPTIONAL)
+        # =========================
+        if len(df) >= 5:
+            test_size = 0.2 if len(df) > 10 else 0.1
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+        else:
+            X_train, X_test, y_train, y_test = X, X, y, y
+            
+        model = RandomForestRegressor(
+            n_estimators=200,
+            random_state=42
+        )
+        model.fit(X_train, y_train)
+        
+        y_pred = model.predict(X_test)
+        MAE = mean_absolute_error(y_test, y_pred)
+        R2 = r2_score(y_test, y_pred) if len(y_test) > 1 else 1.0
+
+        # =========================
+        # 6. INPUT USER
         # =========================
         jml_ayam_input = float(data.get("jumlah_ayam", 0))
         pakan_input = float(data.get("pakan_total_kg", 0))
@@ -193,66 +231,53 @@ def predict_manual():
             return jsonify({"status": "error", "message": "Jumlah ayam input harus > 0"}), 400
 
         # =========================
-        # 2. KONSTANTA
-        # =========================
-        BERAT_TELUR = 0.048
-
-        # =========================
-        # 3. HITUNG REAL (RUMUS)
+        # 7. RUMUS BAKU (INI YANG UTAMA)
         # =========================
         jumlah_butir_real = int(round(jml_ayam_input * (persen_input / 100)))
         jumlah_kg_real = round(jumlah_butir_real * BERAT_TELUR, 1)
 
         # =========================
-        # 4. LOAD MODEL (HASIL TRAIN)
-        # =========================
-        import os
-
-        if not os.path.exists("model_telur.pkl"):
-            return jsonify({
-                "status": "error",
-                "message": "Model belum di-train, silakan klik Train Dataset dulu"
-            }), 400
-        with open("model_telur.pkl", "rb") as f:
-            model = pickle.load(f)
-
-        # =========================
-        # 5. FEATURE INPUT
+        # 8. PREDIKSI MODEL (PEMBANDING)
         # =========================
         pakan_per_ayam_input = pakan_input / jml_ayam_input
-
-        features = ["umur_ayam", "jumlah_ayam", "pakan_per_ayam", "kematian"]
-
+        
         X_input = pd.DataFrame([[
-            umur_input,
-            jml_ayam_input,
-            pakan_per_ayam_input,
-            kematian_input
+            umur_input, jml_ayam_input, pakan_per_ayam_input, kematian_input
         ]], columns=features)
-
-        # =========================
-        # 6. PREDIKSI MODEL
-        # =========================
+        
         pred_kg = max(float(model.predict(X_input)[0]), 0)
         pred_butir = int(round(pred_kg / BERAT_TELUR))
 
         # =========================
-        # 7. FCR
+        # 9. HITUNG FCR (BONUS)
         # =========================
         fcr_real = round(pakan_input / jumlah_kg_real, 2) if jumlah_kg_real > 0 else 0
 
         # =========================
-        # 8. RESPONSE
+        # 10. RESPONSE
         # =========================
         return jsonify({
             "status": "success",
+            "metrik": {
+                "MAE": round(float(MAE), 4),
+                "R2": round(float(R2), 4),
+                "train_rows": len(X_train)
+            },
             "prediksi": {
+                # HASIL UTAMA (RUMUS)
                 "harian_telur_butir": jumlah_butir_real,
                 "harian_telur_kg": jumlah_kg_real,
+
+                # VALIDASI TAMBAHAN
+                "produktivitas_persen": round((jumlah_butir_real / jml_ayam_input) * 100, 2),
+                "fcr": fcr_real,
+
+                # HASIL MODEL (OPSIONAL)
                 "model_telur_kg": round(pred_kg, 2),
                 "model_telur_butir": pred_butir,
-                "produktivitas_persen": round((jumlah_butir_real / jml_ayam_input) * 100, 2),
-                "fcr": fcr_real
+
+                # SELISIH (DEBUG / ANALISIS)
+                "selisih_butir_model_vs_real": pred_butir - jumlah_butir_real
             }
         })
 
