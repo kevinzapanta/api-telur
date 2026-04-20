@@ -55,19 +55,21 @@ def train():
         y_pred = model.predict(X_test)
 
         # =========================
-        # KONVERSI KE KLASIFIKASI (ANTI 0)
+        # KONVERSI KE KLASIFIKASI (FINAL FIX)
         # =========================
         
-        threshold = np.median(y)  # lebih stabil
+        # Threshold pakai percentile biar tidak bias
+        threshold = np.percentile(y, 60)
         
         y_test_class = (y_test >= threshold).astype(int)
         y_pred_class = (y_pred >= threshold).astype(int)
         
-        # DEBUG (boleh dihapus nanti)
+        # DEBUG WAJIB (lihat di log)
+        print("Threshold:", threshold)
         print("y_test_class:", y_test_class.tolist())
         print("y_pred_class:", y_pred_class.tolist())
         
-        # HANDLE KASUS 1 KELAS
+        # HANDLE KASUS KELAS TUNGGAL
         if len(set(y_test_class)) < 2:
             accuracy = 1.0
             precision = 1.0
