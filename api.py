@@ -6,6 +6,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
 app = Flask(__name__)
 
@@ -53,6 +54,19 @@ def train():
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
 
+        # =========================
+        # KONVERSI KE KLASIFIKASI
+        # =========================
+        threshold = y_test.mean()
+        
+        y_test_class = (y_test >= threshold).astype(int)
+        y_pred_class = (y_pred >= threshold).astype(int)
+        
+        accuracy = accuracy_score(y_test_class, y_pred_class)
+        precision = precision_score(y_test_class, y_pred_class, zero_division=0)
+        recall = recall_score(y_test_class, y_pred_class, zero_division=0)
+        f1 = f1_score(y_test_class, y_pred_class, zero_division=0)
+
         # Evaluasi
         MAE = mean_absolute_error(y_test, y_pred)
         MSE = mean_squared_error(y_test, y_pred)
@@ -85,6 +99,10 @@ def train():
             "MSE_per_ayam": round(MSE_per_ayam, 6),
             "RMSE_per_ayam": round(RMSE_per_ayam, 6),
             "R2": round(float(R2), 3),
+            "Accuracy": round(float(accuracy), 3),
+            "Precision": round(float(precision), 3),
+            "Recall": round(float(recall), 3),
+            "F1": round(float(f1), 3),
             "Train_rows": len(X_train),
             "Test_rows": len(X_test),
             "Features_used": list(X.columns),
